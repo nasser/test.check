@@ -208,9 +208,9 @@
     ;; less precision because doubles don't have enough bits to preserve long equivalence at
     ;; extreme values.
     (if (< width #?(:clj Long/MAX_VALUE :cljr Int64/MaxValue))
-      (+ lower (long (Math/floor (* factor width))))
+      (+ lower (long (#?(:clj Math/floor :cljr Math/Floor) (* factor width))))
       ;; Clamp down to upper because double math.
-      (min upper (long (Math/floor (+ lower (* factor width))))))))
+      (min upper (long (#?(:clj Math/floor :cljr Math/Floor) (+ lower (* factor width))))))))
 
 (defn- rand-range
   [rnd lower upper]
@@ -490,7 +490,7 @@
   parameter. Shrinks to zero."
   (sized (fn [size] (choose 0 size)))
   #_
-  (fmap #(Math/abs (long %)) int))
+  (fmap #(#?(:clj Math/abs :cljr Math/Abs) (long %)) int))
 
 (def ^{:added "0.10.0"} small-integer
   "Generates a positive or negative integer bounded by the generator's
@@ -1106,30 +1106,30 @@
              (nil? upper-bound)
              (<= lower-bound upper-bound))]}
   (clojure.core/let [pred (if lower-bound
-                    (if upper-bound
-                      #(<= lower-bound % upper-bound)
-                      #(<= lower-bound %))
-                    (if upper-bound
-                      #(<= % upper-bound)))
+                            (if upper-bound
+                              #(<= lower-bound % upper-bound)
+                              #(<= lower-bound %))
+                            (if upper-bound
+                              #(<= % upper-bound)))
 
-             gen
-             (fmap (fn [[[exp sign] significand]]
-                     (clojure.core/let [;; 1.0 <= base < 2.0
-                                base (inc (/ significand (Math/pow 2 52)))
-                                x (-> base (scalb exp) (* sign))]
-                       (if (or (nil? pred) (pred x))
-                         x
-                         ;; Scale things a bit when we have a partial range
-                         ;; to deal with. It won't be great for generating
-                         ;; simple numbers, but oh well.
-                         (clojure.core/let [[low high] (block-bounds exp sign)
+                     gen
+                     (fmap (fn [[[exp sign] significand]]
+                             (clojure.core/let [;; 1.0 <= base < 2.0
+                                                base (inc (/ significand (#?(:clj Math/pow :cljr Math/Pow) 2 52)))
+                                                x (-> base (scalb exp) (* sign))]
+                               (if (or (nil? pred) (pred x))
+                                 x
+                                 ;; Scale things a bit when we have a partial range
+                                 ;; to deal with. It won't be great for generating
+                                 ;; simple numbers, but oh well.
+                                 (clojure.core/let [[low high] (block-bounds exp sign)
 
-                                    block-lb (cond-> low  lower-bound (max lower-bound))
-                                    block-ub (cond-> high upper-bound (min upper-bound))
-                                    x (+ block-lb (* (- block-ub block-lb) (- base 1)))]
-                           (-> x (min block-ub) (max block-lb))))))
-                   (tuple (double-exp-and-sign lower-bound upper-bound)
-                          backwards-shrinking-significand))]
+                                                    block-lb (cond-> low  lower-bound (max lower-bound))
+                                                    block-ub (cond-> high upper-bound (min upper-bound))
+                                                    x (+ block-lb (* (- block-ub block-lb) (- base 1)))]
+                                   (-> x (min block-ub) (max block-lb))))))
+                           (tuple (double-exp-and-sign lower-bound upper-bound)
+                                  backwards-shrinking-significand))]
     ;; wrapping in the such-that is necessary for staying in bounds
     ;; during shrinking
     (cond->> gen pred (such-that pred))))
@@ -1218,7 +1218,7 @@
              :else
              res)))
    (vector (choose 0 dec-2-32)
-           (Math/ceil (/ (clojure.core/double max-bit-length) 32)))))
+           (#?(:clj Math/ceil :cljr Math/Ceil) (/ (clojure.core/double max-bit-length) 32)))))
 
 (def ^:private size-bounded-bignat
   (clojure.core/let [poor-shrinking-gen
@@ -1346,7 +1346,7 @@
   make it reasonable."
   [g]
   ;; function chosen by ad-hoc experimentation
-  (scale #(long (Math/pow % 0.60)) g))
+  (scale #(long (#?(:clj Math/pow :cljr Math/Pow) % 0.60)) g))
 
 (def keyword
   "Generates keywords without namespaces."
@@ -1453,7 +1453,7 @@
   ;; chosen so that recursive-gen (with the assumptions mentioned in
   ;; the comment below) will generate structures with leaf-node-counts
   ;; not greater than the `size` ~99% of the time.
-  (long (Math/pow size 1.1)))
+  (long (#?(:clj Math/pow :cljr Math/Pow) size 1.1)))
 
 (clojure.core/let [log2 (#?(:clj Math/log :cljr Math/Log) 2)]
   (defn ^:private random-pseudofactoring
@@ -1462,12 +1462,12 @@
     [n rng]
     (if (<= n 2)
       [n]
-      (clojure.core/let [log (Math/log n)
+      (clojure.core/let [log (#?(:clj Math/log :cljr Math/Log) n)
                          [r1 r2] (random/split rng)
                          n1 (-> (random/rand-double r1)
                                 (* (- log log2))
                                 (+ log2)
-                                (Math/exp)
+                                #?(:clj Math/exp :cljr Math/Exp)
                                 (long))
                          n2 (quot n n1)]
         (if (and (< 1 n1) (< 1 n2))
