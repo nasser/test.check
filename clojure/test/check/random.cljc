@@ -76,7 +76,7 @@
         (bit-or -9223372036854775808))
     num))
 
-#_(set! *unchecked-math* :warn-on-boxed)
+(set! *unchecked-math* :warn-on-boxed)
 
 (defmacro ^:private bxoubsr
   "Performs (-> x (unsigned-bit-shift-right n) (bit-xor x))."

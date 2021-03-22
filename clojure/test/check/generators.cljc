@@ -582,7 +582,7 @@
   be coerced to a vector."
   [coll]
   (clojure.core/let [coll (if (vector? coll) coll (vec coll))
-             index-gen (choose 0 (dec (count coll)))]
+                     index-gen (choose 0 (dec (count coll)))]
     (fmap #(reduce swap coll %)
           ;; a vector of swap instructions, with count between
           ;; zero and 2 * count. This means that the average number
@@ -591,14 +591,20 @@
           ;; nice, relatively quick shrinks.
           (vector (tuple index-gen index-gen) 0 (* 2 (count coll))))))
 
-;; NOTE cljs: Comment out for now - David
-
 #?(:clj
    (def byte
      "Generates `java.lang.Byte`s, using the full byte-range."
-     (fmap clojure.core/byte (choose Byte/MIN_VALUE Byte/MAX_VALUE))))
+     (fmap clojure.core/byte (choose Byte/MIN_VALUE Byte/MAX_VALUE)))
+   :cljr
+   (def byte
+     "Generates `java.lang.Byte`s, using the full byte-range."
+     (fmap clojure.core/byte (choose Byte/MinValue Byte/MaxValue))))
 
 #?(:clj
+   (def bytes
+     "Generates byte-arrays."
+     (fmap clojure.core/byte-array (vector byte)))
+   :cljr
    (def bytes
      "Generates byte-arrays."
      (fmap clojure.core/byte-array (vector byte))))
@@ -634,8 +640,7 @@
 
 (defn ^:private transient-set-contains?
   [s k]
-  #? (:clj
-      (.contains ^clojure.lang.ITransientSet s k)))
+  (.contains ^clojure.lang.ITransientSet s k))
 
 (defn ^:private coll-distinct-by*
   "Returns a rose tree."
@@ -709,9 +714,9 @@
     :or {max-tries 10
          ex-fn #(ex-info "Couldn't generate enough distinct elements!" %)}}]
   (clojure.core/let [shuffle-fn (if ordered?
-                          the-shuffle-fn
-                          (fn [_rng coll] coll))
-             hard-min-elements (or num-elements min-elements 1)]
+                                  the-shuffle-fn
+                                  (fn [_rng coll] coll))
+                     hard-min-elements (or num-elements min-elements 1)]
     (if num-elements
       (clojure.core/let [size-pred #(= num-elements (count %))]
         (assert (and (nil? min-elements) (nil? max-elements)))
@@ -727,9 +732,9 @@
             (coll-distinct-by* empty-coll key-fn shuffle-fn gen rng gen-size
                                num-elements hard-min-elements max-tries ex-fn)))))
       (clojure.core/let [min-elements (or min-elements 0)
-                 size-pred (if max-elements
-                             #(<= min-elements (count %) max-elements)
-                             #(<= min-elements (count %)))]
+                         size-pred (if max-elements
+                                     #(<= min-elements (count %) max-elements)
+                                     #(<= min-elements (count %)))]
         (gen-bind
          (if max-elements
            (choose min-elements max-elements)
@@ -745,9 +750,6 @@
                    size-pred)
                  (coll-distinct-by* empty-coll key-fn shuffle-fn gen rng gen-size
                                     num-elements hard-min-elements max-tries ex-fn)))))))))))
-
-;; I tried to reduce the duplication in these docstrings with a macro,
-;; but couldn't make it work in cljs.
 
 (defn vector-distinct
   "Generates a vector of elements from the given generator, with the
@@ -938,7 +940,7 @@
   [min max]
   (sized (fn [size]
            (clojure.core/let [size (clojure.core/max size 1) ;; no need to worry about size=0
-                              max-bit-count (clojure.core/min size #?(:clj 64 :cljr 64))]
+                              max-bit-count (clojure.core/min size 64)]
              (gen-fmap (fn [rose]
                          (clojure.core/let [[bit-count x] (rose/root rose)]
                            (int-rose-tree (long->large-integer bit-count x min max))))
@@ -1018,7 +1020,7 @@
 (defn ^:private scalb
   [x exp]
   #?(:clj (Math/scalb ^double x ^int exp)
-     :cljr (Math/Scalb ^double x ^int exp)))
+     :cljr (* x (Math/Pow 2 exp))))
 
 (defn ^:private fifty-two-bit-reverse
   "Bit-reverses an integer in the range [0, 2^52)."
@@ -1027,7 +1029,15 @@
       (-> n (Long/reverse) (unsigned-bit-shift-right 12))
 
       :cljr
-      (-> n (Int64/Reverse) (unsigned-bit-shift-right 12))))
+      (if (nil? n) 0
+	        (loop [out 0
+                 n (long n)
+                 out-shifter (bit-shift-left 1 52)] ;;;  conditionalized the one difference.
+            (if (< n 1)
+              (* out out-shifter)
+              (recur (-> out (* 2) (+ (bit-and n 1)))
+                     (quot n 2) ;;;  conditionalized the one difference.
+                     (quot n 2)))))))
 
 (def ^:private backwards-shrinking-significand
   "Generates a 52-bit non-negative integer that shrinks toward having
@@ -1040,11 +1050,16 @@
 
 (defn ^:private get-exponent
   [x]
-  #? (:clj
-      (Math/getExponent ^Double x)
+  #?(:clj
+     (Math/getExponent ^Double x)
 
-      :cljr
-      (Math/GetExponent ^Double x)))
+     :cljr ;;; workaround
+	   (if (zero? x)
+	     -1023
+		   (clojure.core/let [bits (BitConverter/DoubleToInt64Bits ^Double x)
+		                      exp (clojure.core/int (bit-and (unsigned-bit-shift-right bits 52) 0x7ff))
+			                    exp (if (zero? exp) 1 exp)]
+		     (- exp 1023)))))
 
 (defn ^:private double-exp-and-sign
   "Generates [exp sign], where exp is in [-1023, 1023] and sign is 1
@@ -1184,7 +1199,8 @@
 
 (defn ^:private two-pow
   [exp]
-  (bigint (.shiftLeft (biginteger 1) exp)))
+  (bigint (#?(:clj .shiftLeft :cljr .LeftShift) (biginteger 1) exp)))
+
 (def ^:private dec-2-32 0xFFFFFFFF)
 (def ^:private just-2-32 0x100000000)
 
@@ -1218,7 +1234,7 @@
              :else
              res)))
    (vector (choose 0 dec-2-32)
-           (#?(:clj Math/ceil :cljr Math/Ceil) (/ (clojure.core/double max-bit-length) 32)))))
+           (#?(:clj Math/ceil :cljr Math/Ceiling) (/ (clojure.core/double max-bit-length) 32)))))
 
 (def ^:private size-bounded-bignat
   (clojure.core/let [poor-shrinking-gen
@@ -1385,14 +1401,13 @@
    (fn [[a b]] (/ a b))
    (tuple small-integer (fmap inc nat))))
 
-#?(:clj
-   (def ^{:added "0.10.0"} big-ratio
-     "Generates a ratio (or integer) using gen/size-bounded-bigint. Shrinks
+(def ^{:added "0.10.0"} big-ratio
+  "Generates a ratio (or integer) using gen/size-bounded-bigint. Shrinks
   toward simpler ratios, which may be larger or smaller."
-     (fmap
-      (fn [[a b]] (/ a b))
-      (tuple size-bounded-bignat
-             (such-that (complement zero?) size-bounded-bignat)))))
+  (fmap
+   (fn [[a b]] (/ a b))
+   (tuple size-bounded-bignat
+          (such-that (complement zero?) size-bounded-bignat))))
 
 (def ^{:added "0.9.0"} uuid
   "Generates a random type-4 UUID. Does not shrink."

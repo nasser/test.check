@@ -7,7 +7,6 @@
   (pass? [_] false)
   (result-data [_]
     ;; spelling out the whole keyword here since `::error` is
-    ;; different in self-hosted cljs.
     {:clojure.test.check.properties/error error}))
 
 (defn ^:private exception?
