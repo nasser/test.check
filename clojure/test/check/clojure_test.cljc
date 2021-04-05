@@ -1,67 +1,103 @@
-;   Copyright (c) Rich Hickey, Reid Draper, and contributors.
-;   All rights reserved.
-;   The use and distribution terms for this software are covered by the
-;   Eclipse Public License 1.0 (http://opensource.org/licenses/eclipse-1.0.php)
-;   which can be found in the file epl-v10.html at the root of this distribution.
-;   By using this software in any fashion, you are agreeing to be bound by
-;   the terms of this license.
-;   You must not remove this notice, or any other, from this software.
-
 (ns clojure.test.check.clojure-test
-  (:require [clojure.test :as ct]))
+  (:require [clojure.test :as ct]
+            [clojure.test.check :as tc]
+            [clojure.test.check.clojure-test.assertions]
+            [clojure.test.check.impl :refer [get-current-time-millis]]))
 
-(defn- assert-check
-  [{:keys [result] :as m}]
-  (println m)
-  (if (instance? Exception result)
-    (throw result)
-    (ct/is result)))
+(defn assert-check
+  [{:keys [result result-data] :as m}]
+  (if-let [error (:clojure.test.check.properties/error result-data)]
+    (throw error)
+    (ct/is (clojure.test.check.clojure-test/check? m))))
 
 (def ^:dynamic *default-test-count* 100)
 
-(defmacro defspec
-  "Defines a new clojure.test test var that uses `quick-check` to verify
-  [property] with the given [args] (should be a sequence of generators),
-  [default-times] times by default.  You can call the function defined as [name]
-  with no arguments to trigger this test directly (i.e.  without starting a
-  wider clojure.test run), or with a single argument that will override
-  [default-times]."
-  ([name property]
-   `(defspec ~name ~*default-test-count* ~property))
+(defn default-reporter-fn
+  "Default function passed as the :reporter-fn to clojure.test.check/quick-check.
+  Delegates to clojure.test/report."
+  [{:keys [type] :as args}]
+  (case type
+    :complete
+    (let [testing-vars ct/*testing-vars*
+          params       (merge (select-keys args [:result :num-tests :seed
+                                                 :time-elapsed-ms])
+                              (when (seq testing-vars)
+                                {:test-var (-> testing-vars first meta :name name)}))]
+      (ct/report {:type :clojure.test.check.clojure-test/complete
+                  :clojure.test.check.clojure-test/property (:property args)
+                  :clojure.test.check.clojure-test/complete params}))
 
-  ([name default-times property]
-   `(do
-      ;; consider my shame for introducing a cyclical dependency like this...
-      ;; Don't think we'll know what the solution is until clojure.test.check
-      ;; integration with another test framework is attempted.
-      (require 'clojure.test.check)
-      (defn ~(vary-meta name assoc
-                        ::defspec true
-                        :test `#(#'assert-check (assoc (~name) :test-var (str '~name))))
-        ([] (~name ~default-times))
-        ([times# & {:keys [seed# max-size#] :as quick-check-opts#}]
+    :trial
+    (ct/report {:type :clojure.test.check.clojure-test/trial
+                :clojure.test.check.clojure-test/property (:property args)
+                :clojure.test.check.clojure-test/trial [(:num-tests args)
+                                                        (:num-tests-total args)]})
+
+    :failure
+    (ct/report {:type :clojure.test.check.clojure-test/shrinking
+                :clojure.test.check.clojure-test/property (:property args)
+                :clojure.test.check.clojure-test/params (vec (:fail args))})
+
+    :shrunk
+    (ct/report {:type :clojure.test.check.clojure-test/shrunk
+                :clojure.test.check.clojure-test/property (:property args)
+                :clojure.test.check.clojure-test/params (-> args :shrunk :smallest vec)})
+    nil))
+
+(def ^:dynamic *default-opts*
+  "The default options passed to clojure.test.check/quick-check
+  by defspec."
+  {:reporter-fn default-reporter-fn})
+
+(defn process-options
+  {:no-doc true}
+  [options]
+  (cond (nil? options) (merge {:num-tests *default-test-count*} *default-opts*)
+        (number? options) (assoc *default-opts* :num-tests options)
+        (map? options) (merge {:num-tests *default-test-count*}
+                              *default-opts*
+                              options)
+        :else (throw (ex-info (str "Invalid defspec options: " (pr-str options))
+                              {:bad-options options}))))
+
+(defmacro defspec
+  "Defines a new clojure.test test var that uses `quick-check` to verify the
+  property, running num-times trials by default.  You can call the function defined as `name`
+  with no arguments to trigger this test directly (i.e., without starting a
+  wider clojure.test run).  If called with arguments, the first argument is the number of
+  trials, optionally followed by keyword arguments as defined for `quick-check`."
+  {:arglists '([name property] [name num-tests? property] [name options? property])}
+  ([name property] `(defspec ~name nil ~property))
+  ([name options property]
+   `(defn ~(vary-meta name assoc
+                      ::defspec true
+                      :test `(fn []
+                               (clojure.test.check.clojure-test/assert-check
+                                (assoc (~name) :test-var (str '~name)))))
+      {:arglists '([] ~'[num-tests & {:keys [seed max-size reporter-fn]}])}
+      ([] (let [options# (process-options ~options)]
+            (apply ~name (:num-tests options#) (apply concat options#))))
+      ([times# & {:as quick-check-opts#}]
+       (let [options# (merge (process-options ~options) quick-check-opts#)]
          (apply
-           clojure.test.check/quick-check
-           times#
-           (vary-meta ~property assoc :name (str '~property))
-           (apply concat quick-check-opts#)))))))
+          tc/quick-check
+          times#
+          (vary-meta ~property assoc :name '~name)
+          (apply concat options#)))))))
 
 (def ^:dynamic *report-trials*
   "Controls whether property trials should be reported via clojure.test/report.
   Valid values include:
-
   * false - no reporting of trials (default)
   * a function - will be passed a clojure.test/report-style map containing
   :clojure.test.check/property and :clojure.test.check/trial slots
   * true - provides quickcheck-style trial reporting (dots) via
   `trial-report-dots`
-
   (Note that all reporting requires running `quick-check` within the scope of a
-  clojure.test run (via `test-ns`, `test-all-vars`, etc.)
-
+  clojure.test run (via `test-ns`, `test-all-vars`, etc.))
   Reporting functions offered by clojure.test.check include `trial-report-dots` and
   `trial-report-periodic` (which prints more verbose trial progress information
-  every `*trial-report-period*` milliseconds."
+  every `*trial-report-period*` milliseconds)."
   false)
 
 (def ^:dynamic *report-shrinking*
@@ -76,26 +112,25 @@
 
 (def ^:private last-trial-report (atom 0))
 
-(let [begin-test-var-method (get-method ct/report :begin-test-var)]
-  (defmethod ct/report :begin-test-var [m]
-    (reset! last-trial-report (/ (.Ticks DateTime/Now) 1000.0))
-    (when begin-test-var-method (begin-test-var-method m))))
-
 (defn- get-property-name
   [{property-fun ::property :as report-map}]
   (or (-> property-fun meta :name) (ct/testing-vars-str report-map)))
 
+(defn with-test-out* [f]
+  (ct/with-test-out (f)))
+
 (defn trial-report-periodic
   "Intended to be bound as the value of `*report-trials*`; will emit a verbose
   status every `*trial-report-period*` milliseconds, like this one:
-
   Passing trial 3286 / 5000 for (your-test-var-name-here) (:)"
   [m]
-  (let [t (/ (.Ticks DateTime/Now) 1000.0)]
+  (let [t (get-current-time-millis)]
     (when (> (- t *trial-report-period*) @last-trial-report)
-      (ct/with-test-out
-        (println "Passing trial" (-> m ::trial first) "/" (-> m ::trial second)
-                 "for" (get-property-name m)))
+      (with-test-out*
+        (fn []
+          (println "Passing trial"
+                   (-> m ::trial first) "/" (-> m ::trial second)
+                   "for" (get-property-name m))))
       (reset! last-trial-report t))))
 
 (defn trial-report-dots
@@ -108,37 +143,42 @@
       (flush))
     (when (== so-far total) (println))))
 
-(defmethod ct/report ::trial [m]
-  (when-let [trial-report-fn (and *report-trials*
-                                  (if (true? *report-trials*)
-                                    trial-report-dots
-                                    *report-trials*))]
-    (trial-report-fn m)))
+(def ^:dynamic *report-completion*
+  "If true, completed tests report test-var, num-tests and seed. Failed tests
+  report shrunk results. Defaults to true."
+  true)
 
-(defmethod ct/report ::shrinking [m]
-  (when *report-shrinking*
-    (ct/with-test-out
-      (println "Shrinking" (get-property-name m)
-               "starting with parameters" (pr-str (::params m))))))
+(when true
+  ;; This check accomodates a number of tools that rebind ct/report
+  ;; to be a regular function instead of a multimethod, and may do
+  ;; so before this code is loaded (see TCHECK-125)
+  (if-not (instance? clojure.lang.MultiFn ct/report)
+    (binding [*out* *err*]
+      (println "clojure.test/report is not a multimethod, some reporting functions have been disabled."))
+    (let [begin-test-var-method (get-method ct/report :begin-test-var)]
+      (defmethod ct/report :begin-test-var [m]
+        (reset! last-trial-report (get-current-time-millis))
+        (when begin-test-var-method (begin-test-var-method m)))
 
-(defn report-trial
-  [property-fun so-far num-tests]
-  (ct/report {:type ::trial
-              ::property property-fun
-              ::trial [so-far num-tests]}))
+      (defmethod ct/report ::trial [m]
+        (when-let [trial-report-fn (and *report-trials*
+                                        (if (true? *report-trials*)
+                                          trial-report-dots
+                                          *report-trials*))]
+          (trial-report-fn m)))
 
-(defn report-failure
-  [property-fun result trial-number failing-params]
-  ;; TODO this is wrong, makes it impossible to clojure.test quickchecks that
-  ;; should fail...
-  #_(ct/report (if (instance? Throwable result)
-                 {:type :error
-                  :message (.getMessage result)
-                  :actual result}
-                 {:type :fail
-                  :expected true
-                  :actual result}))
-  (ct/report {:type ::shrinking
-              ::property property-fun
-              ::params (vec failing-params)}))
+      (defmethod ct/report ::shrinking [m]
+        (when *report-shrinking*
+          (with-test-out*
+            (fn []
+              (println "Shrinking" (get-property-name m)
+                       "starting with parameters" (pr-str (::params m)))))))
 
+      (defmethod ct/report ::complete [m]
+        (when *report-completion*
+          (prn (::complete m))))
+
+      (defmethod ct/report ::shrunk [m]
+        (when *report-completion*
+          (with-test-out*
+            (fn [] (prn m))))))))

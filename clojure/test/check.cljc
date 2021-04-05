@@ -2,7 +2,8 @@
   (:require [clojure.test.check.generators :as gen]
             [clojure.test.check.random :as random]
             [clojure.test.check.results :as results]
-            [clojure.test.check.rose-tree :as rose]))
+            [clojure.test.check.rose-tree :as rose]
+            [clojure.test.check.impl :refer [get-current-time-millis]]))
 
 (declare shrink-loop failure)
 
@@ -10,12 +11,12 @@
   [seed]
   (if seed
     [seed (random/make-random seed)]
-    (let [non-nil-seed (.Millisecond DateTime/Now)]
+    (let [non-nil-seed (get-current-time-millis)]
       [non-nil-seed (random/make-random non-nil-seed)])))
 
 (defn- complete
   [property num-trials seed start-time reporter-fn]
-  (let [time-elapsed-ms (- (.Millisecond DateTime/Now) start-time)]
+  (let [time-elapsed-ms (- (get-current-time-millis) start-time)]
     (reporter-fn {:type :complete
                   :property property
                   :result true
@@ -36,12 +37,7 @@
   (if (satisfies? results/Result result)
     (let [d (results/result-data result)]
       (if-let [[_ e] (find d :clojure.test.check.properties/error)]
-        #?(:clj e
-           :cljs (if (instance? js/Error e)
-                   e
-                   (ex-info "Non-Error object thrown in test"
-                            {}
-                            e)))
+        e
         (results/pass? result)))
     result))
 
@@ -160,7 +156,7 @@
                          :or {max-size 200, reporter-fn (constantly nil)}}]
   (let [[created-seed rng] (make-rng seed)
         size-seq (gen/make-size-range-seq max-size)
-        start-time (.Millisecond DateTime/Now)]
+        start-time (get-current-time-millis)]
     (loop [so-far 0
            size-seq size-seq
            rstate rng]
@@ -196,7 +192,7 @@
      :pass? false
      :result (legacy-result result)
      :result-data (results/result-data result)
-     :time-shrinking-ms (- (.Millisecond DateTime/Now) start-time)
+     :time-shrinking-ms (- (get-current-time-millis) start-time)
      :smallest (:args smallest)}))
 
 (defn- shrink-loop
@@ -212,7 +208,7 @@
   passing example was found.
   Calls reporter-fn on every shrink step."
   [rose-tree reporter-fn]
-  (let [start-time (.Millisecond DateTime/Now)
+  (let [start-time (get-current-time-millis)
         shrinks-this-depth (rose/children rose-tree)]
     (loop [nodes shrinks-this-depth
            current-smallest (rose/root rose-tree)
@@ -254,7 +250,7 @@
 
 (defn- failure
   [property failing-rose-tree trial-number size seed start-time reporter-fn]
-  (let [failed-after-ms (- (.Millisecond DateTime/Now) start-time)
+  (let [failed-after-ms (- (get-current-time-millis) start-time)
         root (rose/root failing-rose-tree)
         result (:result root)
         failure-data {:fail            (:args root)
